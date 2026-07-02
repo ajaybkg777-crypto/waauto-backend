@@ -5,6 +5,7 @@ const { decryptSecret } = require('../utils/tokenVault');
 const workingTokenCache = new Map();
 const configCache = new Map();
 const CONFIG_CACHE_TTL_MS = 60 * 1000;
+const IMAGE_CAPTION_MAX_LENGTH = 1024;
 
 class WhatsAppService {
   constructor(schoolId) {
@@ -155,6 +156,7 @@ class WhatsAppService {
 
   async sendImageMessage(phone, imageUrl, caption = '') {
     const config = await this.getSchoolConfig();
+    const safeCaption = String(caption || '').trim().slice(0, IMAGE_CAPTION_MAX_LENGTH);
     const payload = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
@@ -162,7 +164,7 @@ class WhatsAppService {
       type: 'image',
       image: {
         link: imageUrl,
-        caption
+        ...(safeCaption ? { caption: safeCaption } : {})
       }
     };
 

@@ -11,6 +11,7 @@ const { decryptSecret } = require('../utils/tokenVault');
 const { compactMessageRecord } = require('../utils/storagePolicy');
 const activeBroadcasts = new Set();
 const DELIVERED_STATUSES = ['sent', 'delivered', 'read'];
+const IMAGE_CAPTION_MAX_LENGTH = 1024;
 
 const toObjectId = (value) => {
   if (value instanceof mongoose.Types.ObjectId) return value;
@@ -36,6 +37,13 @@ const readPositiveInt = (value, fallback, max = 500) => {
   const number = Number(value);
   if (!Number.isFinite(number) || number <= 0) return fallback;
   return Math.min(Math.floor(number), max);
+};
+
+const getImageCaptionSendParts = (message = '') => {
+  const text = String(message || '').trim();
+  if (!text) return { caption: '', followUpText: '' };
+  if (text.length <= IMAGE_CAPTION_MAX_LENGTH) return { caption: text, followUpText: '' };
+  return { caption: '', followUpText: text };
 };
 
 const runWithConcurrency = async (items, concurrency, worker) => {
@@ -867,11 +875,26 @@ const processBroadcast = async (broadcastId) => {
                 headerImageUrl: template.header?.type === 'image' ? mediaUrl : undefined
               }
             : {};
-          const result = templateName
-            ? await whatsappService.sendTemplateMessage(normalizedPhone, templateName, variables)
-            : mediaUrl
-              ? await whatsappService.sendImageMessage(normalizedPhone, mediaUrl, broadcast.message)
-              : await whatsappService.sendMessage(normalizedPhone, broadcast.message);
+          let followUpTextResult = null;
+          let result = null;
+
+          if (templateName) {
+            result = await whatsappService.sendTemplateMessage(normalizedPhone, templateName, variables);
+          } else if (mediaUrl) {
+            const { caption, followUpText } = getImageCaptionSendParts(broadcast.message);
+            result = await whatsappService.sendImageMessage(normalizedPhone, mediaUrl, caption);
+            if (result.success && followUpText) {
+              followUpTextResult = await whatsappService.sendMessage(normalizedPhone, followUpText);
+              if (!followUpTextResult.success) {
+                result = {
+                  ...followUpTextResult,
+                  error: `Image sent, but caption text failed: ${followUpTextResult.error || 'Meta WhatsApp text send failed'}`
+                };
+              }
+            }
+          } else {
+            result = await whatsappService.sendMessage(normalizedPhone, broadcast.message);
+          }
 
           if (result.success) {
             const sentAt = new Date();
@@ -921,6 +944,35 @@ const processBroadcast = async (broadcastId) => {
                 upsert: true
               }
             });
+
+            if (followUpTextResult?.success && followUpTextResult.messageId) {
+              messageWrites.push({
+                updateOne: {
+                  filter: { metaMessageId: followUpTextResult.messageId },
+                  update: {
+                    $set: compactMessageRecord({
+                      schoolId: broadcast.schoolId,
+                      leadId: recipient.leadId,
+                      phoneNumberId: whatsappConfig.phoneNumberId || school.whatsapp?.phoneNumberId,
+                      wabaId: whatsappConfig.wabaId || school.whatsapp?.wabaId,
+                      userNumber: normalizedPhone,
+                      direction: 'outbound',
+                      message: broadcast.message,
+                      messageType: 'text',
+                      metaMessageId: followUpTextResult.messageId,
+                      status: 'sent',
+                      sentAt,
+                      rawPayload: {
+                        source: 'broadcast',
+                        broadcastId: broadcast._id,
+                        pairedMediaMessageId: result.messageId
+                      }
+                    })
+                  },
+                  upsert: true
+                }
+              });
+            }
 
             return { success: true };
           }
