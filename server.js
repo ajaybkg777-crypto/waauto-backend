@@ -91,12 +91,23 @@ app.use((req, res, next) => {
 // Public uploaded assets
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({ success: true, message: 'API is running' });
+});
+
 // Rate limiting
-const rateLimitMax = Number(process.env.RATE_LIMIT_MAX || (process.env.NODE_ENV === 'development' ? 1000 : 100));
+const rateLimitMax = Number(process.env.RATE_LIMIT_MAX || 1000);
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: rateLimitMax,
-  message: 'Too many requests from this IP, please try again later'
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method === 'OPTIONS' || req.path === '/health',
+  message: {
+    success: false,
+    message: 'Too many requests from this IP, please try again later'
+  }
 });
 
 app.use('/api/', limiter);
@@ -117,11 +128,6 @@ app.use('/api/flows', flowRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.get('/auth/meta/callback', asyncHandler(handleOnboardingCallback));
 app.post('/auth/meta/callback', asyncHandler(handleOnboardingCallback));
-
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ success: true, message: 'API is running' });
-});
 
 app.get('/', (req, res) => {
   res.json({ success: true, message: 'WaAuto backend is running' });

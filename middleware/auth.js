@@ -143,7 +143,15 @@ exports.attachSchoolId = (req, res, next) => {
     req.schoolId = req.body.schoolId || req.query.schoolId || req.user.schoolId?._id;
   } else {
     // School owner can only access their own school
-    req.schoolId = req.user.schoolId._id;
+    req.schoolId = req.user.schoolId?._id || req.user.schoolId;
   }
+
+  if (!req.schoolId) {
+    return res.status(403).json({
+      success: false,
+      message: 'School workspace is missing for this account'
+    });
+  }
+
   next();
 };

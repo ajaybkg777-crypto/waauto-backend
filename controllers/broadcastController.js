@@ -606,15 +606,15 @@ exports.getBroadcasts = async (req, res) => {
 
     const skip = (page - 1) * limit;
     
-    let [broadcasts, total] = await Promise.all([
+    const [broadcasts, total] = await Promise.all([
       Broadcast.find(query)
+        .select('-recipients -processingLock')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit))
         .populate('createdBy', 'name'),
       Broadcast.countDocuments(query)
     ]);
-    broadcasts = await Promise.all(broadcasts.map((broadcast) => reconcileBroadcastWithMessageLedger(broadcast)));
 
     res.status(200).json({
       success: true,
@@ -637,10 +637,13 @@ exports.getBroadcasts = async (req, res) => {
 // @access  Private
 exports.getBroadcast = async (req, res) => {
   try {
-    let broadcast = await Broadcast.findOne({
+    const broadcast = await Broadcast.findOne({
       _id: req.params.id, 
       schoolId: req.schoolId 
-    }).populate('createdBy', 'name');
+    })
+      .select('-processingLock -recipients.variables')
+      .populate('createdBy', 'name')
+      .lean();
 
     if (!broadcast) {
       return res.status(404).json({
@@ -648,8 +651,6 @@ exports.getBroadcast = async (req, res) => {
         message: 'Broadcast not found'
       });
     }
-
-    broadcast = await reconcileBroadcastWithMessageLedger(broadcast);
 
     res.status(200).json({
       success: true,

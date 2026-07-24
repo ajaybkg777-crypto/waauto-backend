@@ -8,7 +8,7 @@ const WhatsAppAccount = require('../models/WhatsAppAccount');
 const Message = require('../models/Message');
 const ChatbotRule = require('../models/ChatbotRule');
 const { encryptSecret } = require('../utils/tokenVault');
-const { syncMetaAccountForSchool } = require('../services/metaAccountService');
+const { publicWhatsappAccount } = require('../services/metaAccountService');
 const { uploadFileToCloudinary } = require('../services/cloudinaryService');
 
 const getAssetUrl = (req, filePath) => {
@@ -351,11 +351,25 @@ exports.getStats = async (req, res) => {
       ])
     ]);
 
-    // Get school for analytics and the latest Meta WhatsApp account snapshot.
-    const [school, whatsapp] = await Promise.all([
+    // Get school analytics and the latest saved Meta WhatsApp account snapshot.
+    const [school, whatsappAccount] = await Promise.all([
       School.findById(schoolId),
-      syncMetaAccountForSchool(schoolId)
+      WhatsAppAccount.findOne({ schoolId })
     ]);
+
+    if (!school) {
+      return res.status(404).json({
+        success: false,
+        message: 'School not found'
+      });
+    }
+
+    const whatsapp = publicWhatsappAccount(whatsappAccount, school, {
+      status: whatsappAccount?.syncError ? 'cached' : 'saved',
+      source: 'database',
+      message: whatsappAccount?.syncError || undefined,
+      at: whatsappAccount?.lastSyncedAt
+    });
 
     const messageStatus = firstAggregate(messageStatusRows, {
       inbound: inboundMessages,

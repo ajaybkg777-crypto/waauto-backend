@@ -2,6 +2,9 @@ const School = require('../models/School');
 const WhatsAppAccount = require('../models/WhatsAppAccount');
 const { decryptSecret } = require('../utils/tokenVault');
 
+const syncCache = new Map();
+const SYNC_CACHE_TTL_MS = 60 * 1000;
+
 const getMetaGraphBaseUrl = () => {
   const version = process.env.META_GRAPH_API_VERSION || 'v22.0';
   return `https://graph.facebook.com/${version}`;
@@ -21,11 +24,21 @@ const fetchMetaGraph = async (path, accessToken, params = {}) => {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
   });
 
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`
-    }
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Number(process.env.META_SYNC_TIMEOUT_MS || 12000));
+
+  let response;
+  try {
+    response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+
   const data = await response.json();
 
   if (!response.ok || data.error) {
@@ -84,6 +97,12 @@ const getStoredMetaConfig = async (schoolId) => {
 
 const syncMetaAccountForSchool = async (schoolId, options = {}) => {
   const { allowCachedOnError = true } = options;
+  const cacheKey = String(schoolId);
+  const cached = syncCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
   const { school, account, accessToken, phoneNumberId, wabaId, businessId } = await getStoredMetaConfig(schoolId);
 
   if (!accessToken || (!phoneNumberId && !wabaId)) {
@@ -162,11 +181,13 @@ const syncMetaAccountForSchool = async (schoolId, options = {}) => {
       { upsert: true, new: true }
     );
 
-    return publicWhatsappAccount(syncedAccount, school, {
+    const data = publicWhatsappAccount(syncedAccount, school, {
       status: 'fresh',
       source: 'meta',
       at: update.lastSyncedAt
     });
+    syncCache.set(cacheKey, { data, expiresAt: Date.now() + SYNC_CACHE_TTL_MS });
+    return data;
   } catch (error) {
     if (account) {
       await WhatsAppAccount.findByIdAndUpdate(account._id, {
@@ -177,11 +198,13 @@ const syncMetaAccountForSchool = async (schoolId, options = {}) => {
 
     if (!allowCachedOnError) throw error;
 
-    return publicWhatsappAccount(account, school, {
+    const data = publicWhatsappAccount(account, school, {
       status: 'cached',
       source: 'database',
       message: error.message
     });
+    syncCache.set(cacheKey, { data, expiresAt: Date.now() + SYNC_CACHE_TTL_MS });
+    return data;
   }
 };
 
